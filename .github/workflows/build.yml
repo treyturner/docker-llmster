@@ -1,0 +1,70 @@
+name: Build and Publish
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  push:
+    branches: [main]
+    paths-ignore:
+      - README.md      
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths-ignore:
+      - README.md
+  workflow_dispatch: {}
+
+jobs:
+  detect-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Fetch upstream version
+        id: version
+        run: |
+          VERSION=$(curl -fsSL https://lmstudio.ai/install.sh | grep -oP 'APP_VERSION="\K[^"]+')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if image already exists
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker manifest inspect "ghcr.io/${{ github.repository_owner }}/llmster:${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: detect-version
+    if: needs.detect-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - variant: canonical
+            tag-prefix: ''
+            build-args: ''
+          - variant: gateway
+            tag-prefix: gateway-
+            build-args: LLMSTER_GATEWAY_ONLY=1
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Build and push ${{ matrix.variant }}
+        uses: ./.github/actions/build-and-push
+        with:
+          version: ${{ needs.detect-version.outputs.version }}
+          tag-prefix: ${{ matrix.tag-prefix }}
+          build-args: ${{ matrix.build-args }}
+          push: ${{ github.event_name != 'pull_request' }}
+          ghcr-token: ${{ secrets.GITHUB_TOKEN }}
+          forgejo-token: ${{ secrets.FORGEJO_REGISTRY_TOKEN }}
