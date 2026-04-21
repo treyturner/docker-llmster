@@ -9,7 +9,7 @@ inputs:
     description: Tag prefix — empty string for canonical, "gateway-" for gateway
     required: true
   build-args:
-    description: Docker build-arg string (e.g. LLMSTER_GATEWAY_ONLY=1)
+    description: Docker build-arg string (e.g. GATEWAY_ONLY=1)
     required: false
     default: ''
   push:
@@ -57,3 +57,5 @@ runs:
           forgejo.treyturner.info/${{ github.repository_owner }}/llmster:${{ inputs.tag-prefix }}latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        provenance: false
+        sbom: false
