@@ -29,20 +29,24 @@ or for the **gateway-only**, **non-inferencing** image, use either of:
 
 So as to not bury the lede, `llmster` **does not yet appear to support** configuration of API tokens for gating API access.
 
-🚨 Therefore you must only forward traffic **from trusted hosts** to this container, as there is currently **no client-side access control**. The API is **wide open**.
+🚨 Therefore you must only forward traffic from **TRUSTED HOSTS** to this container as there is currently **NO ACCESS CONTROL**.
 
-👮 **YOU HAVE BEEN WARNED.** If you don't know what you're doing, <font color="red">**STOP**</font>.
+👮 **YOU HAVE BEEN WARNED.** If you don't know what you're doing, **STOP**.
 
-`llmster` ships with a default `BIND_ADDRESS` of `127.0.0.1`, which makes sense for native-OS installations. In Docker however this prevents you or services outside the container from reaching it. Therefore, to make this image useful, you'll need to set `BIND_ADDRESS` to `0.0.0.0`. For the reasons outlined above, this image **does not ship this value as a default**.
+`llmster` ships with a default `BIND_ADDRESS` of `127.0.0.1`. This makes sense for native-OS installations, but in Docker it prevents connections from outside the container. To make this image useful, you'll need to set `BIND_ADDRESS` to `0.0.0.0`, but for the aforementioned reason reason, this image does **not ship it as the default**.
 
 As soon as `llmster` supports configuration of API keys, that functionality will be wired into this image to the extent possible.
 
 ## Volume mounts
 
-You're going to want to persist credentials.
-| Container Path | Description |
-| -------------- | -------------------------------------------------------------------- |
-| `/root/.lmstudio/credentials` | Credential store |
+Persist data in these paths using named or host-mounted volumes.
+
+| Container Path              | Description          |
+| --------------------------- | -------------------- |
+| `/root/persist/credentials` | Credential store\*   |
+| `/root/persist/internal`    | Configuration data\* |
+
+\*Persistence of data from LM Studio's _actual_ paths (`/root/.lmstudio/credentials` and `/root/.lmstudio/.internal`) is managed by [`start.sh`](start.sh).
 
 ## Environment variables
 
@@ -55,7 +59,7 @@ You're going to want to persist credentials.
 
 ## Regarding `SIGINT`
 
-The startup script starts the service and then `exec tail`s the newest log file. In order for `tail` to respect `Ctrl-C`/`SIGINT`, you must start the container with `--init`.
+The startup script starts the service and then runs `exec tail` to stream the newest log. In order for `lms` to respect `Ctrl-C`/`SIGINT`, you must start the container with `--init`.
 
 ## Usage
 
@@ -66,8 +70,10 @@ docker run \
   --rm -it --init \
   --name llmster \
   --hostname slartibartfast \
+  -p "1234:1234" \
   -e BIND_ADDRESS=0.0.0.0 \
-  -v /mnt/cache/appdata/llmster/credentials:/root/.lmstudio/credentials \
+  -v /mnt/cache/appdata/llmster/credentials:/root/persist/credentials \
+  -v /mnt/cache/appdata/llmster/internal:/root/persist/internal \
   ghcr.io/treyturner/llmster
 ```
 
@@ -86,7 +92,8 @@ services:
     ports:
       - "1234:1234"
     volumes:
-      - /mnt/cache/appdata/llmster/credentials:/root/.lmstudio/credentials
+      - /mnt/cache/appdata/llmster/credentials:/root/persist/credentials
+      - /mnt/cache/appdata/llmster/internal:/root/persist/internal
 ```
 
 ### GPU passthrough (full image only)

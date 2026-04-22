@@ -19,10 +19,10 @@ RUN curl -fsSL -o /tmp/install.sh https://lmstudio.ai/install.sh \
     && chmod +x /tmp/install.sh \
     && /tmp/install.sh \
     && rm -f /tmp/install.sh \
-    && printf '%s' "$(basename $(dirname $(find /root/.lmstudio -type f -name llmster)))" > /root/.lmstudio/.version \
+    && basename "$(find /root/.lmstudio/llmster -mindepth 1 -maxdepth 1 -type d)" > /root/version \
     && if [[ "${GATEWAY_ONLY}" == "1" ]]; then \
-        rm -rf /root/.lmstudio/llmster/$(cat /root/.lmstudio/.version)/.bundle/bin/extensions/backends/llama* \
-            /root/.lmstudio/llmster/$(cat /root/.lmstudio/.version)/.bundle/bin/extensions/backends/vendor/linux-llama*; \
+        rm -rf /root/.lmstudio/llmster/$(cat /root/version)/.bundle/bin/extensions/backends/llama* \
+            /root/.lmstudio/llmster/$(cat /root/version)/.bundle/bin/extensions/backends/vendor/linux-llama*; \
     fi
 
 COPY --chmod=755 start.sh /root/start.sh
