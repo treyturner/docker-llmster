@@ -27,15 +27,37 @@ or for the **gateway-only**, **non-inferencing** image, use either of:
 
 ## Security
 
-So as to not bury the lede, `llmster` **does not yet appear to support** configuration of API tokens for gating API access.
+So as to not bury the lede, `llmster` **does not require authentication by default**. Out of the box, anything that can reach the port can use the API.
 
-🚨 Therefore you must only forward traffic from **TRUSTED HOSTS** to this container as there is currently **NO ACCESS CONTROL**.
+🚨 Unless you [enable API token authentication](#enabling-api-token-authentication), only forward traffic from **TRUSTED HOSTS** to this container.
 
 👮 **YOU HAVE BEEN WARNED.** If you don't know what you're doing, **STOP**.
 
-`llmster` ships with a default `BIND_ADDRESS` of `127.0.0.1`. This makes sense for native-OS installations, but in Docker it prevents connections from outside the container. To make this image useful, you'll need to set `BIND_ADDRESS` to `0.0.0.0`, but for the aforementioned reason reason, this image does **not ship it as the default**.
+`llmster` ships with a default `BIND_ADDRESS` of `127.0.0.1`. This makes sense for native-OS installations, but in Docker it prevents connections from outside the container. To make this image useful, you'll need to set `BIND_ADDRESS` to `0.0.0.0`, but for the aforementioned reason, this image does **not ship it as the default**.
 
-As soon as `llmster` supports configuration of API keys, that functionality will be wired into this image to the extent possible.
+### Enabling API token authentication
+
+LM Studio 0.4.0 added [API tokens](https://lmstudio.ai/docs/developer/core/authentication), and `llmster` enforces them. The only documented way to turn them on is the desktop app's GUI, and `lms` has no flag for it, so this image does it for you: set `LM_API_TOKEN` and [`start.sh`](start.sh) writes the token into `llmster`'s token store before the server starts.
+
+The token must look like `sk-lm-<8 letters/digits>:<20 letters/digits>`. Generate one with:
+
+```bash
+echo "sk-lm-$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8):$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
+```
+
+Then pass it to the container as `LM_API_TOKEN`, or mount it as a file and set `LM_API_TOKEN_FILE` (e.g. a Docker secret at `/run/secrets/lm_api_token`). Clients must send it as `Authorization: Bearer sk-lm-…`. The Anthropic-compatible `/v1/messages` endpoint also accepts `x-api-key`. Requests with no token or a bad one get `401`.
+
+Notes:
+
+- Check that it's working by making an unauthenticated request: `curl -i http://<host>:1234/v1/models` should return `401`.
+- An invalid `LM_API_TOKEN` stops the container at startup instead of running without authentication.
+- Only the token from `LM_API_TOKEN` is managed. Any tokens already in the store (e.g. from a persisted desktop-app config) are kept and still work.
+- Changing `LM_API_TOKEN` replaces the managed token. Removing it removes that token, and turns authentication off if no other tokens remain.
+- If the server listens on a non-loopback address without authentication, the container logs a warning at startup.
+- `lms` inside the container (e.g. `docker exec llmster lms ls`) authenticates separately and keeps working.
+- The token store (`permissions-store.json` in the persisted `internal` volume) isn't documented by LM Studio. Its format was worked out from `llmster` 0.0.25-1 and may change in a future release. If the format changes, `llmster` may silently fall back to no authentication, so use the `curl` check above after upgrading.
+
+Even with tokens enabled, traffic is plain HTTP. Put a TLS-terminating reverse proxy in front of the container before exposing it beyond a trusted network.
 
 ## Volume mounts
 
@@ -55,6 +77,8 @@ Persist data in these paths using named or host-mounted volumes.
 | `BIND_ADDRESS`        | ⚠️ **[DANGEROUS](#security).** Set `0.0.0.0` to listen on all interfaces.                            | `127.0.0.1`            |
 | `ENABLE_CORS`         | Set `1` to allow any website you visit to access the server. Required if you're developing a web app | `0`                    |
 | `LISTEN_PORT`         | Will use the port from the prior invocation if not supplied                                          | `1234` _(if no prior)_ |
+| `LM_API_TOKEN`        | If set, require this [API token](#enabling-api-token-authentication) for all API requests            | _(no authentication)_  |
+| `LM_API_TOKEN_FILE`   | Path to a file containing the API token. Used when `LM_API_TOKEN` is unset                           |                        |
 | `LM_LINK_DEVICE_NAME` | If set, used as the LM Link device name                                                              | _(container hostname)_ |
 
 ## Regarding `SIGINT`
@@ -72,6 +96,7 @@ docker run \
   --hostname slartibartfast \
   -p "1234:1234" \
   -e BIND_ADDRESS=0.0.0.0 \
+  -e LM_API_TOKEN=sk-lm-REPLACE_ME \
   -v /mnt/cache/appdata/llmster/credentials:/root/persist/credentials \
   -v /mnt/cache/appdata/llmster/internal:/root/persist/internal \
   ghcr.io/treyturner/llmster
@@ -89,6 +114,7 @@ services:
     init: true
     environment:
       BIND_ADDRESS: "0.0.0.0"
+      LM_API_TOKEN: "sk-lm-REPLACE_ME"
     ports:
       - "1234:1234"
     volumes:
