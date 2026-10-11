@@ -188,9 +188,106 @@ persist_credentials() {
     ln -s "${persist_dir}" "${src_dir}"
 }
 
+write_permissions_store() {
+    local store="$1" content="$2"
+    local tmp="${store}.tmp.$$"
+
+    (umask 077 && printf '%s\n' "${content}" > "${tmp}")
+    mv -f "${tmp}" "${store}"
+}
+
+configure_api_token() {
+    # llmster reads its API token store (SuperJSON-wrapped) once at startup.
+    # Only the token entry labeled below is managed; tokens created elsewhere are kept.
+    local store="/root/persist/internal/permissions-store.json"
+    local label="LM_API_TOKEN (docker-llmster)"
+    local token="${LM_API_TOKEN:-}"
+    local current updated
+
+    if [[ -z "${token}" && -n "${LM_API_TOKEN_FILE:-}" ]]; then
+        [[ -r "${LM_API_TOKEN_FILE}" ]] || { echo "LM_API_TOKEN_FILE is not readable: ${LM_API_TOKEN_FILE}" >&2; exit 1; }
+        token="$(tr -d '[:space:]' < "${LM_API_TOKEN_FILE}")"
+    fi
+
+    current='{"json":{"tokenMode":"disabled","tokens":[],"serverPermissions":{}}}'
+    if [[ -s "${store}" ]]; then
+        if ! jq -e '.json | type == "object"' "${store}" >/dev/null 2>&1; then
+            echo "Refusing to modify unrecognized API token store: ${store}" >&2
+            [[ -n "${token}" ]] && exit 1
+            return 0
+        fi
+        current="$(cat "${store}")"
+    elif [[ -z "${token}" ]]; then
+        return 0
+    fi
+
+    if [[ -z "${token}" ]]; then
+        # Drop a previously env-managed token; disable auth if no tokens remain.
+        jq -e --arg managed "${label}" '(.json.tokens // []) | any(.label == $managed)' <<<"${current}" >/dev/null || return 0
+        updated="$(jq --arg managed "${label}" '
+            .json.tokens = ((.json.tokens // []) | map(select(.label != $managed)))
+            | if (.json.tokens | length) == 0 then .json.tokenMode = "disabled" else . end
+        ' <<<"${current}")"
+        write_permissions_store "${store}" "${updated}"
+        echo "LM_API_TOKEN unset; removed its token from the API token store." >&2
+        return 0
+    fi
+
+    if [[ ! "${token}" =~ ^sk-lm-([A-Za-z0-9]{8}):([A-Za-z0-9]{20})$ ]]; then
+        echo "LM_API_TOKEN must match sk-lm-<8 letters/digits>:<20 letters/digits>" >&2
+        exit 1
+    fi
+    local id="${BASH_REMATCH[1]}"
+    local hash
+    hash="$(printf '%s' "${BASH_REMATCH[2]}" | openssl dgst -sha512 -binary | base64 -w0)"
+
+    updated="$(jq --arg managed "${label}" --arg id "${id}" --arg hash "${hash}" \
+        --argjson now "$(($(date +%s) * 1000))" '
+        ((.json.tokens // []) | map(select(.label == $managed and .clientIdentifier == $id
+            and .clientPasskeySHA512Base64 == $hash)) | first) as $prev
+        | .json.tokenMode = "required"
+        | .json.serverPermissions = (.json.serverPermissions // {})
+        | .json.tokens = ((.json.tokens // [])
+            | map(select(.label != $managed and .clientIdentifier != $id)))
+            + [{
+                clientIdentifier: $id,
+                clientPasskeySHA512Base64: $hash,
+                label: $managed,
+                createdAt: ($prev.createdAt // $now),
+                lastUsedAt: ($prev.lastUsedAt // null),
+                permissions: ($prev.permissions // {})
+            }]
+    ' <<<"${current}")"
+
+    if [[ "$(jq -cS . <<<"${updated}")" != "$(jq -cS . <<<"${current}")" ]]; then
+        write_permissions_store "${store}" "${updated}"
+    fi
+}
+
+warn_if_exposed_without_auth() {
+    local store="/root/persist/internal/permissions-store.json"
+    local config="/root/persist/internal/http-server-config.json"
+    local bind="${BIND_ADDRESS:-}"
+
+    [[ -z "${bind}" && -s "${config}" ]] && bind="$(jq -r '.networkInterface // empty' "${config}" 2>/dev/null || true)"
+    case "${bind}" in ''|127.*|localhost|::1) return 0 ;; esac
+    [[ -s "${store}" ]] && jq -e '.json.tokenMode == "required"' "${store}" >/dev/null 2>&1 && return 0
+
+    cat >&2 <<EOF
+
+==========================================================================
+🚨 The server is bound to ${bind} with NO API token authentication.
+Anything that can reach this port can use it. Set LM_API_TOKEN to
+require a token; see the Security section of the README.
+==========================================================================
+
+EOF
+}
+
 # Persist credentials and config
 persist_internal
 persist_credentials
+configure_api_token
 sync_internal_to_persist_loop &
 
 lms_bin="/root/.lmstudio/llmster/$(cat /root/version)/.bundle/lms"
@@ -207,6 +304,7 @@ server_args=()
 [[ -n "${BIND_ADDRESS:-}" ]] && server_args+=(--bind "${BIND_ADDRESS}")
 [[ "${ENABLE_CORS:-0}" == "1" ]] && server_args+=(--cors)
 "${lms_bin}" server start "${server_args[@]}"
+warn_if_exposed_without_auth
 
 # Warn if not logged in
 if ! "${lms_bin}" whoami 2>&1 | grep -q "You are currently logged in"; then

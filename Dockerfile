@@ -10,6 +10,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ca-certificates \
       coreutils \
       curl \
+      jq \
       libatomic1 \
       libgomp1
 
